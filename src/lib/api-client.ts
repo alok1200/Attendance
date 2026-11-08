@@ -218,8 +218,7 @@ export const api = {
 
   /* -------------------------------- attendance ------------------------------- */
   attendanceToday: () => request<TodayResponse>('/api/v1/attendance/today'),
-  // GPS is optional: when HR registered the office network IP, a punch from the
-  // office network is accepted without coordinates (server verifies the IP).
+  // GPS required unless the user has an approved WFH / Official Work (Outside) today.
   checkIn: (gps?: { lat: number; lng: number; accuracy: number }) =>
     request<TodayResponse>('/api/v1/attendance/check-in', { body: gps ?? {} }),
   checkOut: (gps?: { lat: number; lng: number; accuracy: number }) =>
@@ -279,11 +278,6 @@ export const api = {
     monthly: (params: { month: string; userId?: string }) => request<{ month: string; rows: MonthlyRow[] }>(`/api/v1/reports/monthly${qs(params)}`),
     late: (params: { month: string }) => request<{ month: string; rows: LateRow[] }>(`/api/v1/reports/late${qs(params)}`),
     leaveBalance: (params: { year: number }) => request<{ year: number; rows: LeaveBalanceRow[] }>(`/api/v1/reports/leave-balance${qs(params)}`),
-  },
-
-  /* ---------------------------------- meta ----------------------------------- */
-  meta: {
-    myIp: () => request<{ ip: string; known: boolean }>('/api/v1/meta/my-ip'),
   },
 
   /* ------------------------------- notifications ------------------------------ */

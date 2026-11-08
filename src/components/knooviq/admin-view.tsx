@@ -22,12 +22,18 @@ import {
   ScrollText,
   Search,
   SlidersHorizontal,
-  Globe,
   Trash2,
   Users,
 } from 'lucide-react'
 
 import { api } from '@/lib/api-client'
+import { bestFix, GpsError } from '@/hooks/use-geolocation'
+import dynamic from 'next/dynamic'
+
+const GeofenceMap = dynamic(() => import('./geofence-map'), {
+  ssr: false,
+  loading: () => <div className="h-64 animate-pulse rounded-md bg-muted" />,
+})
 import { fmtDate, fmtTime, isoOf, todayISO } from '@/lib/dates'
 import { LEAVE_TYPE_LABEL, ROLE_LABEL } from '@/lib/labels'
 import { EmptyState, Spinner, StatusBadge } from '@/components/knooviq/ui-bits'
@@ -82,7 +88,7 @@ function useAdjustState(dep: unknown, adjust: () => void) {
     adjust()
   }
 }
-type OfficePayload = { name: string; lat: number; lng: number; radiusMeters: number; timezone: string; allowedIps: string }
+type OfficePayload = { name: string; lat: number; lng: number; radiusMeters: number; timezone: string }
 type ShiftPayload = {
   name: string
   startTime: string
@@ -106,7 +112,8 @@ function useDebounced(value: string, delay = 300): string {
 }
 
 /**
- * Every admin mutation: invalidates the whole ['admin'] tree on success + success
+ * Every admin mutation: invalidates every cached query on success (office, shift,
+ * holiday and policy edits also change the dashboard/calendar data) + success
  * toast; surfaces ApiClientError.message via toast.error on failure.
  */
 function useAdminMutation<TInput, TOutput>(
@@ -117,7 +124,7 @@ function useAdminMutation<TInput, TOutput>(
   return useMutation<TOutput, Error, TInput>({
     mutationFn,
     onSuccess: (output, input) => {
-      void qc.invalidateQueries({ queryKey: ['admin'] })
+      void qc.invalidateQueries()
       toast.success(typeof successMessage === 'function' ? successMessage(output, input) : successMessage)
     },
     onError: (err) => toast.error(err.message),
@@ -879,7 +886,6 @@ interface OfficeForm {
   lng: string
   radiusMeters: string
   timezone: string
-  allowedIps: string
 }
 
 function OfficesTab() {
@@ -896,7 +902,7 @@ function OfficesTab() {
     <div className="space-y-4">
       <TabHeader
         title="Offices"
-        description="Physical locations with GPS geofences — optionally register the office network IP so employees can punch without GPS."
+        description="Physical locations with GPS geofences — employees must be inside the fence to check in/out."
         action={
           <Button onClick={() => setAddOpen(true)}>
             <Plus className="size-4" /> Add office
@@ -923,7 +929,6 @@ function OfficesTab() {
                 <TableHead>Coordinates</TableHead>
                 <TableHead>Radius</TableHead>
                 <TableHead>Timezone</TableHead>
-                <TableHead>Office IPs</TableHead>
                 <TableHead>Users</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -937,9 +942,6 @@ function OfficesTab() {
                   </TableCell>
                   <TableCell>{o.radiusMeters} m</TableCell>
                   <TableCell className="text-muted-foreground">{o.timezone}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground" title={o.allowedIps || 'No office-network IPs — GPS-only punching'}>
-                    {o.allowedIps || '—'}
-                  </TableCell>
                   <TableCell>{o._count?.users ?? 0}</TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
@@ -1011,9 +1013,8 @@ function OfficesTab() {
 /** Shared add/edit office dialog — open with `office = null` to create. */
 function OfficeDialog({ open, office, onClose }: { open: boolean; office: Office | null; onClose: () => void }) {
   const isNew = office === null
-  const [form, setForm] = useState<OfficeForm>({ name: '', lat: '', lng: '', radiusMeters: '25', timezone: 'Asia/Kolkata', allowedIps: '' })
+  const [form, setForm] = useState<OfficeForm>({ name: '', lat: '', lng: '', radiusMeters: '75', timezone: 'Asia/Kolkata' })
   const [capturing, setCapturing] = useState(false)
-  const [detectingIp, setDetectingIp] = useState(false)
 
   useAdjustState(`${open}|${office?.id ?? 'new'}`, () => {
     if (!open) return
@@ -1024,10 +1025,9 @@ function OfficeDialog({ open, office, onClose }: { open: boolean; office: Office
         lng: String(office.lng),
         radiusMeters: String(office.radiusMeters),
         timezone: office.timezone,
-        allowedIps: office.allowedIps ?? '',
       })
     } else {
-      setForm({ name: '', lat: '', lng: '', radiusMeters: '25', timezone: 'Asia/Kolkata', allowedIps: '' })
+      setForm({ name: '', lat: '', lng: '', radiusMeters: '75', timezone: 'Asia/Kolkata' })
     }
   })
 
@@ -1039,39 +1039,28 @@ function OfficeDialog({ open, office, onClose }: { open: boolean; office: Office
 
   const set = (patch: Partial<OfficeForm>) => setForm((f) => ({ ...f, ...patch }))
 
-  /** Stand inside the real office and capture its exact coordinates (spec §6.2):
-   * the geofence only works when the saved office position matches reality. */
-  const captureCurrentLocation = () => {
-    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-      toast.error('Geolocation is not supported by this browser — enter coordinates manually.')
-      return
-    }
+  const pinLat = Number(form.lat)
+  const pinLng = Number(form.lng)
+  const hasPin = form.lat !== '' && form.lng !== '' && Number.isFinite(pinLat) && Number.isFinite(pinLng)
+
+  /** Stand inside the real office and capture its coordinates (spec §6.2). Samples GPS
+   * for up to 20 s and keeps the best reading; laptops without GPS get a warning. */
+  const captureCurrentLocation = async () => {
     setCapturing(true)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setCapturing(false)
-        const acc = Math.round(pos.coords.accuracy)
-        setForm((f) => ({
-          ...f,
-          lat: pos.coords.latitude.toFixed(6),
-          lng: pos.coords.longitude.toFixed(6),
-          // The fence must at least cover the GPS uncertainty of the capture itself.
-          radiusMeters: String(Math.min(1000, Math.max(Number(f.radiusMeters) || 25, acc + 15))),
-        }))
-        toast.success(
-          `Office location captured (±${acc} m accuracy). Radius adjusted to cover the GPS uncertainty — tune it to your building size.`,
-        )
-      },
-      (err) => {
-        setCapturing(false)
-        toast.error(
-          err.code === err.PERMISSION_DENIED
-            ? 'Location permission denied. Allow location access for this site, then retry.'
-            : 'Could not get a GPS fix here. Move near a window / open area and retry, or enter coordinates manually.',
-        )
-      },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 },
-    )
+    try {
+      const c = await bestFix({ maxWaitMs: 20000, goodEnoughM: 10 })
+      const acc = Math.round(c.accuracy)
+      setForm((f) => ({ ...f, lat: c.latitude.toFixed(6), lng: c.longitude.toFixed(6) }))
+      if (acc > 50) {
+        toast.warning(`This device has no precise GPS (±${acc} m). Drag the pin onto your building on the map, or capture from a phone.`)
+      } else {
+        toast.success(`Office location captured (±${acc} m). Check the pin sits on your building.`)
+      }
+    } catch (e) {
+      toast.error(e instanceof GpsError ? e.message : 'Could not get a GPS fix — drop the pin on the map instead.')
+    } finally {
+      setCapturing(false)
+    }
   }
 
   const submit = (e: FormEvent) => {
@@ -1086,14 +1075,13 @@ function OfficeDialog({ open, office, onClose }: { open: boolean; office: Office
       lng,
       radiusMeters,
       timezone: form.timezone.trim() || 'Asia/Kolkata',
-      allowedIps: form.allowedIps.trim(),
     }
     save.mutate({ id: office?.id ?? '', data }, { onSuccess: onClose })
   }
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{isNew ? 'Add office' : 'Edit office'}</DialogTitle>
           <DialogDescription>Offices define where employees can punch in and out.</DialogDescription>
@@ -1103,15 +1091,21 @@ function OfficeDialog({ open, office, onClose }: { open: boolean; office: Office
             <Input id="of-name" value={form.name} onChange={(e) => set({ name: e.target.value })} required />
           </Field>
           <div className="rounded-md border border-dashed bg-muted/40 p-3">
-            <p className="text-xs font-semibold">Standing inside the office right now?</p>
+            <p className="text-xs font-semibold">Set the office position</p>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              Capture the exact coordinates here — employees inside the building will then pass the geofence check.
+              Zoom to your building on the satellite map and click / drag the pin onto it. Or stand inside the office with a phone and use your current location.
             </p>
             <Button type="button" size="sm" variant="outline" className="mt-2" onClick={captureCurrentLocation} disabled={capturing}>
               <MapPin className="mr-1 h-3 w-3" aria-hidden />
-              {capturing ? 'Locating…' : 'Use my current location'}
+              {capturing ? 'Locating… (up to 20 s)' : 'Use my current location'}
             </Button>
           </div>
+          <GeofenceMap
+            className="h-64"
+            center={hasPin ? { lat: pinLat, lng: pinLng } : null}
+            radius={Number(form.radiusMeters) || 0}
+            onCenterChange={(p) => set({ lat: p.lat.toFixed(6), lng: p.lng.toFixed(6) })}
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Latitude" htmlFor="of-lat">
               <Input
@@ -1142,7 +1136,7 @@ function OfficeDialog({ open, office, onClose }: { open: boolean; office: Office
             <Field
               label="Radius (meters)"
               htmlFor="of-radius"
-              hint="Geofence for check-in/out. 25 m suits open desks; indoor GPS usually needs 50–150 m."
+              hint="Building half-width + ~30 m for GPS drift. Typical 50–150 m."
             >
               <Input
                 id="of-radius"
@@ -1162,50 +1156,6 @@ function OfficeDialog({ open, office, onClose }: { open: boolean; office: Office
               />
             </Field>
           </div>
-          <Field
-            label="Office network IPs (optional)"
-            htmlFor="of-ips"
-            hint="Comma-separated public IPs, CIDR ranges (182.71.0.0/16) or wildcards (182.71.*.*). Employees connected from these IPs can check in/out without GPS — the network proves office presence."
-          >
-            <div className="flex gap-2">
-              <Input
-                id="of-ips"
-                value={form.allowedIps}
-                onChange={(e) => set({ allowedIps: e.target.value })}
-                placeholder="103.25.128.7, 182.71.0.0/16"
-                className="font-mono text-xs"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                className="shrink-0"
-                disabled={detectingIp}
-                onClick={async () => {
-                  setDetectingIp(true)
-                  try {
-                    const { ip, known } = await api.meta.myIp()
-                    if (!known) {
-                      toast.error('Could not detect your IP — enter it manually.')
-                      return
-                    }
-                    setForm((f) => {
-                      const parts = f.allowedIps.split(',').map((s) => s.trim()).filter(Boolean)
-                      if (parts.includes(ip)) return f
-                      return { ...f, allowedIps: [...parts, ip].join(', ') }
-                    })
-                    toast.success(`Added your current IP ${ip} — employees on this network can punch without GPS.`)
-                  } catch {
-                    toast.error('Could not detect your IP — enter it manually.')
-                  } finally {
-                    setDetectingIp(false)
-                  }
-                }}
-              >
-                <Globe className="mr-1 h-3 w-3" aria-hidden />
-                {detectingIp ? 'Detecting…' : 'Detect my current IP'}
-              </Button>
-            </div>
-          </Field>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel

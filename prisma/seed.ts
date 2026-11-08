@@ -36,11 +36,6 @@ export async function ensureSeeded(): Promise<{ seeded: boolean }> {
       lng: 77.594566,
       radiusMeters: 25,
       timezone: 'Asia/Kolkata',
-      // Demo default: any IPv4 network counts as "office network" so every
-      // employee can punch without GPS. For production, replace with the
-      // office's real public IP(s), e.g. "103.25.128.7, 182.71.0.0/16"
-      // (Admin → Offices → Edit → Office network IPs → "Detect my current IP").
-      allowedIps: '::1, *.*.*.*',
     },
   })
 

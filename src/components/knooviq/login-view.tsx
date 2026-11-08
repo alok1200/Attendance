@@ -12,6 +12,7 @@ const DEMO_LOGINS = [
   { label: 'HR Admin', id: 'KN001', password: 'Admin@123' },
   { label: 'Manager', id: 'KN002', password: 'Manager@123' },
   { label: 'Employee', id: 'KN003', password: 'Employee@123' },
+  { label: 'System Admin', id: 'ADMIN01', password: 'Adm!XcLrpDfu' },
 ]
 
 export function LoginView() {

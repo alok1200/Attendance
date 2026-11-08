@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { handleRoute, ok } from '@/lib/api'
-import { assertSameOrigin, clientIp, requireAuth } from '@/lib/auth'
+import { assertSameOrigin, requireAuth } from '@/lib/auth'
 import { assertAction, deriveState, evaluatePunch, getAttendance, recalcAttendance } from '@/lib/attendance-service'
 import { todayPayload, punchSchema } from '../today/payload'
 import { todayISO } from '@/lib/dates'
@@ -19,7 +19,7 @@ export const POST = handleRoute(async (req) => {
   const att = await getAttendance(user.id, todayISO())
   assertAction(deriveState(att), 'check-out')
 
-  const evaluation = await evaluatePunch(user, { lat, lng, accuracy }, clientIp(req))
+  const evaluation = await evaluatePunch(user, { lat, lng, accuracy })
 
   await db.attendance.update({
     where: { id: att!.id },
