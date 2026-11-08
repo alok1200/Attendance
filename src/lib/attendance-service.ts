@@ -4,7 +4,7 @@
  */
 import { db } from './db'
 import { ApiError } from './api'
-import { evaluateGeofence, ipMatchesOfficeList } from './geo'
+import { evaluateGeofence } from './geo'
 import { env } from './env'
 import { todayISO, istMinutesOfDay, istDateFromISOTime, isSunday, hhmmToMinutes } from './dates'
 import type { Prisma } from '@prisma/client'
@@ -96,21 +96,17 @@ export function computeDayStatus(opts: {
  * Geofence + fraud evaluation for a punch (spec §6.2).
  * Approved WFH / Official Work (Outside) requests skip the geofence.
  *
- * Punch priority:
- *  1. Approved WFH / OUTSIDE → bypass everything.
- *  2. GPS provided and inside the fence → mode OFFICE (spec GPS flow).
- *  3. Client IP matches the office network allow-list → mode IP (network
- *     presence proves office presence when GPS is unavailable or unreliable).
- *  4. Otherwise rejected with the geofence reason (or a GPS-required hint).
+ * Punch rules:
+ *  1. Approved WFH / OUTSIDE → bypass the geofence.
+ *  2. Otherwise a GPS fix is compulsory and must be inside the fence (mode OFFICE).
  */
 export async function evaluatePunch(
   user: {
     id: string
     officeId?: string | null
-    office?: { lat: number; lng: number; radiusMeters: number; allowedIps?: string | null } | null
+    office?: { lat: number; lng: number; radiusMeters: number } | null
   },
   gps: { lat?: number | null; lng?: number | null; accuracy?: number | null },
-  clientIp?: string | null,
 ) {
   // Approved WFH / OUTSIDE for today?
   const date = todayISO()
@@ -169,45 +165,14 @@ export async function evaluatePunch(
       }
     }
 
-    // GPS says outside — office-network presence can still prove the punch.
-    if (ipMatchesOfficeList(clientIp, office.allowedIps)) {
-      return {
-        mode: 'IP',
-        distance: Math.round(result.distance * 10) / 10,
-        lat: null,
-        lng: null,
-        accuracy: null,
-        flagged: false,
-        flagReason: null,
-        bypassNote: 'Office network verified (IP) — geofence not required',
-      }
-    }
-
     throw new ApiError(422, result.reason ?? 'Outside the office geofence', {
       distance: Math.round(result.distance),
       accuracy: Math.round(result.accuracy),
       radius: office.radiusMeters,
-      ipAllowed: false,
     })
   }
 
-  // No GPS fix — punch purely on office-network presence.
-  if (ipMatchesOfficeList(clientIp, office.allowedIps)) {
-    return {
-      mode: 'IP',
-      distance: null as number | null,
-      lat: null,
-      lng: null,
-      accuracy: null,
-      flagged: false,
-      flagReason: null,
-      bypassNote: 'Office network verified (IP) — geofence not required',
-    }
-  }
-
-  throw new ApiError(422, 'GPS location required — allow location access for this site (or connect to the office Wi-Fi network configured by HR).', {
-    ipAllowed: false,
-  })
+  throw new ApiError(422, 'Location access is required to check in/out — allow location permission for this site and retry.')
 }
 
 /** Flag suspicious punches (spec §6.2): accuracy exactly 0, identical coords 6+ decimals, impossible travel. */

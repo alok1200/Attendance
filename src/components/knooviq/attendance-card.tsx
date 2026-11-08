@@ -19,17 +19,17 @@ import type { TodayResponse } from '@/types/api'
 export function AttendanceCard({
   today,
   gpsReady,
-  ipVerified,
   onRequestGps,
 }: {
   today: TodayResponse
   gpsReady: boolean
-  ipVerified: boolean
-  onRequestGps: () => void
+  /** Takes a fresh multi-sample GPS fix; resolves null on failure (GPS card shows why). */
+  onRequestGps: () => Promise<GeolocationCoordinates | null>
 }) {
   const qc = useQueryClient()
   const allowed = (a: string) => today.allowedActions.includes(a)
-  const punchable = gpsReady || ipVerified // GPS fix OR registered office network
+  const gpsExempt = !!today.approvedModeToday // approved WFH / Outside: server skips the geofence
+  const punchable = gpsReady || gpsExempt
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['attendance-today'] })
@@ -39,15 +39,21 @@ export function AttendanceCard({
   }
 
   const punch = useMutation({
-    mutationFn: (v: { action: 'check-in' | 'check-out'; withGps: boolean }) =>
-      v.action === 'check-in'
-        ? api.checkIn(v.withGps ? getPunchGps() : undefined)
-        : api.checkOut(v.withGps ? getPunchGps() : undefined),
+    mutationFn: async (v: { action: 'check-in' | 'check-out' }) => {
+      let gps: { lat: number; lng: number; accuracy: number } | undefined
+      if (!gpsExempt) {
+        // Fresh fix at the moment of the punch — never a stale page-load reading.
+        const c = await onRequestGps()
+        if (!c) throw new Error('Could not get your location — see the GPS card for steps.')
+        gps = { lat: c.latitude, lng: c.longitude, accuracy: c.accuracy }
+      }
+      return v.action === 'check-in' ? api.checkIn(gps) : api.checkOut(gps)
+    },
     onSuccess: (_d, v) => {
       toast.success(v.action === 'check-in' ? 'Checked in — have a great day!' : 'Checked out. See you tomorrow!')
       invalidate()
     },
-    onError: (err) => toast.error(err instanceof ApiClientError ? err.message : 'Punch failed'),
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Punch failed'),
   })
   const brk = useMutation({
     mutationFn: (action: 'start-break' | 'end-break') => (action === 'start-break' ? api.breakStart() : api.breakEnd()),
@@ -58,9 +64,6 @@ export function AttendanceCard({
     onError: (err) => toast.error(err instanceof ApiClientError ? err.message : 'Break action failed'),
   })
 
-  // GPS injection: the cards below pass real GPS via a shared ref — simpler:
-  // the parent passes gps via context. To keep this component self-contained,
-  // we use a module-level holder set by the dashboard.
   return (
     <Card>
       <CardHeader>
@@ -75,14 +78,6 @@ export function AttendanceCard({
           {today.attendance?.flagged ? (
             <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-800" title={today.attendance.flagReason ?? ''}>
               Flagged for review
-            </span>
-          ) : null}
-          {ipVerified ? (
-            <span
-              className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-900"
-              title="This device is on a network IP registered for your office — punches are accepted without GPS."
-            >
-              Office network verified (IP)
             </span>
           ) : null}
         </CardTitle>
@@ -107,17 +102,17 @@ export function AttendanceCard({
             label="Check In"
             icon={<LogIn className="h-4 w-4" />}
             disabled={!allowed('check-in') || !punchable || punch.isPending}
-            tooltip={!punchable && allowed('check-in') ? 'Get a GPS fix (Refresh GPS) or connect to the office Wi-Fi' : undefined}
+            tooltip={!punchable && allowed('check-in') ? 'Allow location access and press Refresh GPS' : undefined}
             loading={punch.isPending && punch.variables?.action === 'check-in'}
-            onClick={() => punch.mutate({ action: 'check-in', withGps: gpsReady })}
+            onClick={() => punch.mutate({ action: 'check-in' })}
           />
           <PunchButton
             label="Check Out"
             icon={<LogOut className="h-4 w-4" />}
             disabled={!allowed('check-out') || !punchable || punch.isPending}
-            tooltip={!punchable && allowed('check-out') ? 'Get a GPS fix (Refresh GPS) or connect to the office Wi-Fi' : undefined}
+            tooltip={!punchable && allowed('check-out') ? 'Allow location access and press Refresh GPS' : undefined}
             loading={punch.isPending && punch.variables?.action === 'check-out'}
-            onClick={() => punch.mutate({ action: 'check-out', withGps: gpsReady })}
+            onClick={() => punch.mutate({ action: 'check-out' })}
           />
           <PunchButton
             label="Start Break"
@@ -135,17 +130,12 @@ export function AttendanceCard({
           />
         </div>
 
-        {!gpsReady && !ipVerified ? (
+        {!punchable ? (
           <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
             <button type="button" className="font-medium text-emerald-700 underline underline-offset-2" onClick={onRequestGps}>
               Refresh GPS
             </button>{' '}
-            to enable Check In / Check Out. Geolocation needs browser permission (and HTTPS outside localhost).
-          </p>
-        ) : null}
-        {!gpsReady && ipVerified ? (
-          <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-            No GPS fix, but this device is on the office network — Check In / Check Out will be verified by IP.
+            to enable Check In / Check Out. Location permission is required (and HTTPS outside localhost).
           </p>
         ) : null}
 
@@ -185,15 +175,3 @@ function PunchButton({
     </Button>
   )
 }
-
-/** Shared GPS holder so punch mutations always send the latest fix. */
-const gpsHolder: { lat: number; lng: number; accuracy: number } = { lat: 0, lng: 0, accuracy: 0 }
-export function setPunchGps(gps: { lat: number | null; lng: number | null; accuracy: number | null }) {
-  gpsHolder.lat = gps.lat ?? 0
-  gpsHolder.lng = gps.lng ?? 0
-  gpsHolder.accuracy = gps.accuracy ?? 0
-}
-function getPunchGps() {
-  return { ...gpsHolder }
-}
-void gpsHolder

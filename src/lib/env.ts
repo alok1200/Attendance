@@ -15,7 +15,7 @@ const schema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   DEFAULT_OFFICE_RADIUS_M: z.coerce.number().int().positive().default(25),
-  MAX_GPS_ACCURACY_M: z.coerce.number().int().positive().default(100),
+  MAX_GPS_ACCURACY_M: z.coerce.number().int().positive().default(50),
   LOGIN_RATE_LIMIT: z.coerce.number().int().positive().default(5),
   LOGIN_LOCK_MINUTES: z.coerce.number().int().positive().default(15),
 })

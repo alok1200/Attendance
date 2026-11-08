@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { handleRoute, ok } from '@/lib/api'
-import { assertSameOrigin, clientIp, requireAuth } from '@/lib/auth'
+import { assertSameOrigin, requireAuth } from '@/lib/auth'
 import { assertAction, deriveState, evaluatePunch, getAttendance, isLate, shiftOf } from '@/lib/attendance-service'
 import { todayPayload, punchSchema } from '../today/payload'
 import { todayISO } from '@/lib/dates'
@@ -10,7 +10,6 @@ import { notify } from '@/lib/notify'
  * POST /api/v1/attendance/check-in (spec §6.1/§6.2)
  * Server computes Haversine distance; rejected outside geofence with details.
  * Approved WFH / Official Work (Outside) bypasses the geofence.
- * Office-network (IP) presence substitutes for GPS when configured by HR.
  */
 export const POST = handleRoute(async (req) => {
   assertSameOrigin(req)
@@ -24,7 +23,7 @@ export const POST = handleRoute(async (req) => {
   const att = await getAttendance(user.id, todayISO())
   assertAction(deriveState(att), 'check-in')
 
-  const evaluation = await evaluatePunch(user, { lat, lng, accuracy }, clientIp(req))
+  const evaluation = await evaluatePunch(user, { lat, lng, accuracy })
   const shift = shiftOf(user)
 
   const created = await db.attendance.create({

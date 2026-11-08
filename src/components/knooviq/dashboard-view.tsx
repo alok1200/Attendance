@@ -6,10 +6,8 @@ import { CalendarRange, ClipboardList, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { api, ApiClientError } from '@/lib/api-client'
-import { ipMatchesOfficeList } from '@/lib/geo'
 import { useMe } from '@/hooks/use-auth'
 import { useGeolocation } from '@/hooks/use-geolocation'
-import { setPunchGps } from './attendance-card'
 import { GpsCard } from './gps-card'
 import { AttendanceCard } from './attendance-card'
 import { TodaySummary } from './today-summary'
@@ -49,28 +47,12 @@ export function DashboardView({ onNavigate }: { onNavigate: (view: 'calendar' | 
     refetchInterval: 60_000,
   })
 
-  // initial GPS attempt + keep punch GPS in sync
+  // initial GPS attempt (punches take their own fresh fix)
   useEffect(() => {
     gps.locate()
-     
   }, [])
 
-  useEffect(() => {
-    setPunchGps({ lat: gps.lat, lng: gps.lng, accuracy: gps.accuracy })
-  }, [gps.lat, gps.lng, gps.accuracy])
-
-  // office for simulate + radar
   const office = today?.office ?? null
-
-  // Office-network (IP) presence: the server sees this client's public IP —
-  // when HR registered it as an office IP, punches work without GPS.
-  const { data: myIpData } = useQuery({
-    queryKey: ['my-ip'],
-    queryFn: () => api.meta.myIp(),
-    staleTime: 10 * 60_000,
-  })
-  const myIp = myIpData?.ip ?? null
-  const ipVerified = ipMatchesOfficeList(myIp, office?.allowedIps)
 
   const cancelRequest = async (id: string) => {
     try {
@@ -111,17 +93,14 @@ export function DashboardView({ onNavigate }: { onNavigate: (view: 'calendar' | 
           <GpsCard
             office={office}
             gps={gps}
-            ipVerified={ipVerified}
-            myIp={myIp}
+            maxAccuracyMeters={today.maxAccuracyMeters}
             onRefresh={gps.locate}
-            onSimulate={() => office && gps.simulate(office.lat, office.lng, 8)}
           />
         </div>
         <div className="space-y-4 lg:col-span-2">
           <AttendanceCard
             today={today}
             gpsReady={gps.status === 'ready'}
-            ipVerified={ipVerified}
             onRequestGps={gps.locate}
           />
           <TodaySummary today={today} />

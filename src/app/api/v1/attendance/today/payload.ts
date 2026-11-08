@@ -11,7 +11,7 @@ const gpsSchema = z.object({
   accuracy: z.number().min(0).max(10000),
 })
 
-/** Punch body: GPS is optional — office-network (IP) presence can substitute. */
+/** Punch body: GPS optional at parse time (approved WFH/Outside needs none); evaluatePunch enforces it otherwise. */
 const punchSchema = gpsSchema.partial()
 
 /** Shared today-payload builder used by GET /attendance/today and after punches. */
@@ -43,7 +43,7 @@ export async function todayPayload(userId: string) {
           currentBreakMinutes: openBreak ? Math.floor((Date.now() - new Date(openBreak.start).getTime()) / 60000) : 0,
         }
       : null,
-    office: office ? { id: office.id, name: office.name, lat: office.lat, lng: office.lng, radiusMeters: office.radiusMeters, timezone: office.timezone, allowedIps: office.allowedIps } : null,
+    office: office ? { id: office.id, name: office.name, lat: office.lat, lng: office.lng, radiusMeters: office.radiusMeters, timezone: office.timezone } : null,
     shift: shiftOf(user),
     statusNote: user.statusNote ? { status: user.statusNote.status, note: user.statusNote.note, expectedReturnAt: user.statusNote.expectedReturnAt, updatedAt: user.statusNote.updatedAt } : null,
     approvedModeToday: wfhApproved ? (wfhApproved.type === 'WFH' ? 'WFH' : 'OUTSIDE') : null,

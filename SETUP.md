@@ -83,7 +83,7 @@ Everything else is rejected with the exact reason (distance, accuracy, no office
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | dev defaults | **Change in production** |
 | `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | `15m` / `7d` | Token lifetimes |
 | `COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
-| `MAX_GPS_ACCURACY_M` | `100` | Punches above this GPS error are rejected |
+| `MAX_GPS_ACCURACY_M` | `50` | Punches above this GPS error are rejected |
 | `LOGIN_RATE_LIMIT` / `LOGIN_LOCK_MINUTES` | `5` / `15` | Brute-force protection |
 
 ## 7. Production build

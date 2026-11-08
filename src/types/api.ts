@@ -57,7 +57,7 @@ export interface TodayResponse {
   state: AttState
   allowedActions: string[]
   attendance: AttendanceToday | null
-  office: { id: string; name: string; lat: number; lng: number; radiusMeters: number; timezone: string; allowedIps: string } | null
+  office: { id: string; name: string; lat: number; lng: number; radiusMeters: number; timezone: string } | null
   shift: { startTime: string; endTime: string; graceMinutes: number; fullDayMinutes: number; halfDayMinutes: number }
   statusNote: { status: string; note: string; expectedReturnAt: string | null; updatedAt: string } | null
   approvedModeToday: 'WFH' | 'OUTSIDE' | null
@@ -183,7 +183,6 @@ export interface Office {
   lng: number
   radiusMeters: number
   timezone: string
-  allowedIps: string
   _count?: { users: number }
 }
 
